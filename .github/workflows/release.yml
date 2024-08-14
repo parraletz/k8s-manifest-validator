@@ -1,0 +1,46 @@
+name: 'Release'
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 🛬
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Setup Node ⚙️
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies 📦
+        run: npm install
+      - name: Build typescript 📦
+        run: npm run build && find dist/index.js
+      - name: Commit and push dist folder 🚀
+        uses: EndBug/add-and-commit@v9
+        with:
+          message: 'chore(dist): generate dist folder'
+          add: 'dist'
+          push: true
+          author_name: github-actions
+          author_email: github-actions@github.com
+      - run: docker build --tag parraletz/add-reviewers .
+      - run: docker build --tag occmundial/add-reviewers .
+      - name: Release
+        run: |
+          npm run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN }}
+          DOCKER_USERNAME: parraletz
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKERHUB_USER: parraletz
