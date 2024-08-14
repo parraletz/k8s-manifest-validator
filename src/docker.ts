@@ -1,66 +1,108 @@
 import { Octokit } from '@octokit/rest'
-import * as fs from 'fs'
-import yaml from 'js-yaml'
+import { execSync } from 'child_process'
+import * as path from 'path'
+import simpleGit from 'simple-git'
 
-const prNumber = process.env.PR_NUMBER || process.env.PLUGIN_PR_NUMBER
-const reviewersFilePath =
-  (process.env.REVIEWERS_FILE_PATH as string) ||
-  (process.env.PLUGIN_REVIEWERS_FILE_PATH as string)
-const fileContent = fs.readFileSync(reviewersFilePath, 'utf8')
-
-const reviewersData = yaml.load(fileContent) as { reviewers: string[] }
-let reviewers = reviewersData.reviewers
-
-console.log('Reviewers:', reviewers)
+const git = simpleGit()
 
 const octokit = new Octokit({
   auth: process.env.GITHUB_TOKEN || process.env.PLUGIN_GITHUB_TOKEN
 })
 
-const remoteUrl =
-  (process.env.CI_REMOTE_URL as string) ||
-  (process.env.DRONE_REPO_LINK as string) ||
-  (process.env.PLUGIN_REPO_LINK as string)
-
-const repoMatch = remoteUrl.match(/github\.com\/([^\/]+)\/([^\/]+)(\.git)?$/)
-
-const owner =
-  (repoMatch && repoMatch[1]) ||
-  process.env.PLUGIN_GITHUB_OWNER ||
-  process.env.GITHUB_OWNER
-const repo =
-  (repoMatch && repoMatch[2]) ||
-  process.env.PLUGIN_GITHUB_REPO ||
-  process.env.GITHUB_REPO
-
-const commitAuthor = process.env.CI_COMMIT_AUTHOR
-if (commitAuthor) {
-  reviewers = reviewers.filter(reviewer => reviewer !== commitAuthor)
-  console.log('Filtered Reviewers:', reviewers)
+async function getChangeFiles(base: string, head: string): Promise<string[]> {
+  const diff = await git.diff(['--name-only', `${base}...${head}`])
+  return diff.split('\n').filter(file => file)
 }
 
-async function addReviewers() {
+async function postComment(prNumber: number, commentBody: string) {
+  const remoteUrl =
+    (process.env.CI_REMOTE_URL as string) ||
+    (process.env.DRONE_REPO_LINK as string) ||
+    (process.env.PLUGIN_REPO_LINK as string)
+
+  const repoMatch = remoteUrl.match(/github\.com\/([^\/]+)\/([^\/]+)(\.git)?$/)
+
+  const owner =
+    ((repoMatch && repoMatch[1]) as string) ||
+    (process.env.PLUGIN_GITHUB_OWNER as string) ||
+    (process.env.PLUGIN_OWNER as string) ||
+    (process.env.GITHUB_OWNER as string)
+
+  let repo =
+    (repoMatch && repoMatch[2]) ||
+    (process.env.PLUGIN_GITHUB_REPO as string) ||
+    (process.env.PLUGIN_REPO as string) ||
+    (process.env.GITHUB_REPO as string)
+
+  if (repo.endsWith('.git')) {
+    repo = repo.slice(0, -4)
+  }
+
+  await octokit.issues.createComment({
+    owner,
+    repo,
+    issue_number: prNumber,
+    body: commentBody
+  })
+}
+
+function lintFile(filePath: string): boolean {
   try {
-    if (!prNumber) {
-      throw new Error('PR_NUMBER is not defined')
-    } else if (!reviewers) {
-      throw new Error('REVIEWERS is not defined')
-    } else if (!owner) {
-      throw new Error('OWNER is not defined')
-    } else if (!repo) {
-      throw new Error('REPO is not defined')
-    } else {
-      const response = await octokit.pulls.requestReviewers({
-        owner,
-        repo,
-        pull_number: +prNumber,
-        reviewers
-      })
-      console.log('Code reviewers added:', response.data)
-    }
+    const result = execSync(`kubeconform ${filePath}`).toString()
+    console.log(result)
+    return true
   } catch (error) {
-    console.error('Error to added code reviewers:', error)
+    console.error(
+      `Linting failed for file: ${filePath} with error: ${(error as Error).message}`
+    )
+    return false
   }
 }
 
-addReviewers()
+async function main() {
+  const baseRevision =
+    process.env.CI_BASE_REVISION || process.env.GITHUB_BASE_SHA
+  const headRevision = process.env.CI_COMMIT_SHA || process.env.GITHUB_SHA
+  if (!baseRevision || !headRevision) {
+    console.error('Base or head revision not found')
+    process.exit(1)
+  }
+
+  console.log(`Base revision: ${baseRevision}`)
+
+  const changeFiles = await getChangeFiles(baseRevision, headRevision)
+
+  console.log('Changed files:', changeFiles)
+
+  let lintErrors: string[] = []
+
+  changeFiles.forEach(file => {
+    if (file.endsWith('.yaml') || file.endsWith('.yml')) {
+      const absolutePath = path.resolve(file)
+      console.log(`Linting file: ${absolutePath}`)
+      const lintResult = lintFile(absolutePath)
+      if (!lintResult) {
+        lintErrors.push(file)
+      }
+    }
+  })
+
+  let commentBody = ''
+  if (lintErrors.length > 0) {
+    const errorEmoji = '❌'
+    commentBody += `${errorEmoji} **Linting failed for the following files:**\n`
+    lintErrors.forEach(file => {
+      commentBody += `- ${file}\n`
+    })
+  } else {
+    const successEmoji = '✅'
+    commentBody += `${successEmoji} **Linting passed for all changed files**`
+  }
+
+  await postComment(parseInt(process.env.PR_NUMBER as string), commentBody)
+}
+
+main().catch(error => {
+  console.error('Error:', error)
+  process.exit(1)
+})

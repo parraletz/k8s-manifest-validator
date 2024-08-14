@@ -34,8 +34,7 @@ jobs:
           push: true
           author_name: github-actions
           author_email: github-actions@github.com
-      - run: docker build --tag parraletz/add-reviewers .
-      - run: docker build --tag occmundial/add-reviewers .
+      - run: docker build --tag parraletz/k8s-manifest-validator .
       - name: Release
         run: |
           npm run semantic-release
