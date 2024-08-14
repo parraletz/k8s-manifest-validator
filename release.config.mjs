@@ -16,7 +16,7 @@ export default {
     [
       '@semantic-release-plus/docker',
       {
-        name: 'occmundial/add-reviewers'
+        name: 'parraletz/k8s-manifest-validator'
       }
     ],
     '@semantic-release/github',
