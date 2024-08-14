@@ -10,7 +10,7 @@ export default {
     [
       '@semantic-release-plus/docker',
       {
-        name: 'parraletz/add-reviewers'
+        name: 'parraletz/k8s-manifest-validator'
       }
     ],
     [
